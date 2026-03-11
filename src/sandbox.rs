@@ -1,5 +1,4 @@
 use std::{
-    error::Error,
     ffi::CString,
     os::fd::{AsFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
 };
@@ -7,8 +6,37 @@ use std::{
 use nix::{
     sched::{CloneFlags, clone},
     sys::wait::waitpid,
-    unistd::{Pid, close, execv, pipe, read, write},
+    unistd::{Pid, execv, pipe, read, write},
 };
+
+use crate::error::SandboxError;
+
+macro_rules! setup {
+    ($expr:expr) => {
+        $expr.map_err(|e| SandboxError::Namespace {
+            source: e,
+            call: stringify!($expr),
+        })
+    };
+}
+
+macro_rules! spawn {
+    ($expr:expr) => {
+        $expr.map_err(|e| SandboxError::Spawn {
+            source: e,
+            call: stringify!($expr),
+        })
+    };
+}
+
+macro_rules! exec {
+    ($expr:expr) => {
+        $expr.map_err(|e| SandboxError::Exec {
+            source: e,
+            call: stringify!($expr),
+        })
+    };
+}
 
 pub struct Sandbox {
     command: CString,
@@ -23,10 +51,11 @@ pub struct SandboxBuilder {
 }
 
 impl SandboxBuilder {
-    pub fn new(command: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(command: &str) -> Result<Self, SandboxError> {
+        let c_command_str = CString::new(command)?;
         Ok(Self {
-            command: CString::new(command)?,
-            argv: vec![CString::new(command)?],
+            command: c_command_str.clone(),
+            argv: vec![c_command_str],
             network: true,
         })
     }
@@ -42,9 +71,11 @@ impl SandboxBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Sandbox, Box<dyn Error>> {
+    pub fn build(self) -> Result<Sandbox, SandboxError> {
         if self.command.as_bytes().is_empty() {
-            return Err("Invalid Configuration: No command to run.".into());
+            return Err(SandboxError::InvalidConfig(
+                "Invalid Configuration: No command to run.",
+            ));
         }
         Ok(Sandbox {
             command: self.command,
@@ -55,14 +86,14 @@ impl SandboxBuilder {
 }
 
 impl Sandbox {
-    pub fn run(&self) -> Result<(), Box<dyn Error>> {
+    pub fn run(&self) -> Result<(), SandboxError> {
         let child_pid = self.spawn_child()?;
-        let status = waitpid(child_pid, None)?;
+        let status = spawn!(waitpid(child_pid, None))?;
         Ok(())
     }
 
-    fn spawn_child(&self) -> Result<Pid, Box<dyn Error>> {
-        let (read_fd, write_fd) = pipe()?;
+    fn spawn_child(&self) -> Result<Pid, SandboxError> {
+        let (read_fd, write_fd) = setup!(pipe())?;
         let raw_read_fd: RawFd = read_fd.into_raw_fd();
         let raw_write_fd: RawFd = write_fd.into_raw_fd();
         let mut stack = vec![0u8; 1024 * 1024];
@@ -74,7 +105,7 @@ impl Sandbox {
         }
 
         let child_pid = unsafe {
-            clone(
+            spawn!(clone(
                 Box::new(|| {
                     let write_fd = OwnedFd::from_raw_fd(raw_write_fd);
                     drop(write_fd);
@@ -85,23 +116,23 @@ impl Sandbox {
                 &mut stack,
                 flags,
                 Some(nix::sys::signal::Signal::SIGCHLD as i32),
-            )?
+            ))?
         };
         let read_fd = unsafe { OwnedFd::from_raw_fd(raw_read_fd) };
         drop(read_fd);
         let write_fd = unsafe { OwnedFd::from_raw_fd(raw_write_fd) };
-        write(write_fd.as_fd(), &[1])?;
+        setup!(write(write_fd.as_fd(), &[1]))?;
         drop(write_fd);
         return Ok(child_pid);
     }
 
-    fn setup_child(&self, raw_read_fd: RawFd) -> Result<(), Box<dyn Error>> {
+    fn setup_child(&self, raw_read_fd: RawFd) -> Result<(), SandboxError> {
         let read_fd = unsafe { OwnedFd::from_raw_fd(raw_read_fd) };
         let mut buf = [0u8; 1];
-        read(read_fd.as_fd(), &mut buf)?;
+        setup!(read(read_fd.as_fd(), &mut buf))?;
         drop(read_fd);
 
-        execv(&self.command, &self.argv)?;
+        exec!(execv(&self.command, &self.argv))?;
         unreachable!("Child should have execv, no longer able to proceed in current program.")
     }
 }
