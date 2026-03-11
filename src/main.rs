@@ -1,5 +1,7 @@
 use clap::Parser;
 
+use crate::sandbox::SandboxBuilder;
+
 pub mod sandbox;
 
 #[derive(Parser, Debug)]
@@ -15,10 +17,18 @@ struct Args {
 
     /// The arguments to pass to the programe.
     args: Vec<String>,
+
+    #[arg(short, long, default_value_t = true)]
+    network: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    sandbox::start_sandbox(&args.process, &args.args)?;
+    let sandbox = SandboxBuilder::new(&args.process)?
+        .add_args(&args.args)
+        .network(args.network)
+        .build()?;
+
+    sandbox.run()?;
     return Ok(());
 }
