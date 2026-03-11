@@ -1,4 +1,4 @@
-use std::ffi::NulError;
+use std::{ffi::NulError, io};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxError {
@@ -10,6 +10,11 @@ pub enum SandboxError {
     #[error("sandbox spawn failed in '{call}': {source}")]
     Spawn {
         source: nix::Error,
+        call: &'static str,
+    },
+    #[error("sandbox setup failed in '{call}': {source}")]
+    Setup {
+        source: io::Error,
         call: &'static str,
     },
     #[error("invalid configuration: {0}")]

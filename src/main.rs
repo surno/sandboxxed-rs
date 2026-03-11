@@ -3,6 +3,7 @@ use clap::Parser;
 use crate::sandbox::SandboxBuilder;
 
 pub mod error;
+pub mod namespace;
 pub mod sandbox;
 
 #[derive(Parser, Debug)]

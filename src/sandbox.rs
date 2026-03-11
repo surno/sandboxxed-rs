@@ -9,7 +9,10 @@ use nix::{
     unistd::{Pid, execv, pipe, read, write},
 };
 
-use crate::error::SandboxError;
+use crate::{
+    error::SandboxError,
+    namespace::{write_gid_map, write_uid_map},
+};
 
 macro_rules! setup {
     ($expr:expr) => {
@@ -107,6 +110,7 @@ impl Sandbox {
         let child_pid = unsafe {
             spawn!(clone(
                 Box::new(|| {
+                    // Wait until the parent signlas that the namespace is complete.
                     let write_fd = OwnedFd::from_raw_fd(raw_write_fd);
                     drop(write_fd);
                     self.setup_child(raw_read_fd).unwrap();
@@ -120,6 +124,10 @@ impl Sandbox {
         };
         let read_fd = unsafe { OwnedFd::from_raw_fd(raw_read_fd) };
         drop(read_fd);
+
+        write_uid_map(child_pid)?;
+        write_gid_map(child_pid)?;
+
         let write_fd = unsafe { OwnedFd::from_raw_fd(raw_write_fd) };
         setup!(write(write_fd.as_fd(), &[1]))?;
         drop(write_fd);
