@@ -11,17 +11,9 @@ use nix::{
 
 use crate::{
     error::SandboxError,
+    filesystem::make_mounts_private,
     namespace::{write_gid_map, write_uid_map},
 };
-
-macro_rules! setup {
-    ($expr:expr) => {
-        $expr.map_err(|e| SandboxError::Namespace {
-            source: e,
-            call: stringify!($expr),
-        })
-    };
-}
 
 macro_rules! spawn {
     ($expr:expr) => {
@@ -91,12 +83,12 @@ impl SandboxBuilder {
 impl Sandbox {
     pub fn run(&self) -> Result<(), SandboxError> {
         let child_pid = self.spawn_child()?;
-        let status = spawn!(waitpid(child_pid, None))?;
+        let status = exec!(waitpid(child_pid, None))?;
         Ok(())
     }
 
     fn spawn_child(&self) -> Result<Pid, SandboxError> {
-        let (read_fd, write_fd) = setup!(pipe())?;
+        let (read_fd, write_fd) = spawn!(pipe())?;
         let raw_read_fd: RawFd = read_fd.into_raw_fd();
         let raw_write_fd: RawFd = write_fd.into_raw_fd();
         let mut stack = vec![0u8; 1024 * 1024];
@@ -129,7 +121,7 @@ impl Sandbox {
         write_gid_map(child_pid)?;
 
         let write_fd = unsafe { OwnedFd::from_raw_fd(raw_write_fd) };
-        setup!(write(write_fd.as_fd(), &[1]))?;
+        spawn!(write(write_fd.as_fd(), &[1]))?;
         drop(write_fd);
         return Ok(child_pid);
     }
@@ -137,8 +129,10 @@ impl Sandbox {
     fn setup_child(&self, raw_read_fd: RawFd) -> Result<(), SandboxError> {
         let read_fd = unsafe { OwnedFd::from_raw_fd(raw_read_fd) };
         let mut buf = [0u8; 1];
-        setup!(read(read_fd.as_fd(), &mut buf))?;
+        spawn!(read(read_fd.as_fd(), &mut buf))?;
         drop(read_fd);
+
+        make_mounts_private()?;
 
         exec!(execv(&self.command, &self.argv))?;
         unreachable!("Child should have execv, no longer able to proceed in current program.")

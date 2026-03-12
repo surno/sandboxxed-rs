@@ -4,7 +4,7 @@ use std::{ffi::NulError, io};
 pub enum SandboxError {
     #[error("namespace setup failed in '{call}': {source}")]
     Namespace {
-        source: nix::Error,
+        source: io::Error,
         call: &'static str,
     },
     #[error("sandbox spawn failed in '{call}': {source}")]
@@ -15,6 +15,11 @@ pub enum SandboxError {
     #[error("sandbox setup failed in '{call}': {source}")]
     Setup {
         source: io::Error,
+        call: &'static str,
+    },
+    #[error("mount failed in '{call}': {source}")]
+    Mount {
+        source: nix::Error,
         call: &'static str,
     },
     #[error("invalid configuration: {0}")]
