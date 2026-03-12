@@ -1,17 +1,21 @@
 use std::{
     ffi::CString,
+    fs,
     os::fd::{AsFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
 };
 
 use nix::{
     sched::{CloneFlags, clone},
     sys::wait::waitpid,
-    unistd::{Pid, execv, pipe, read, write},
+    unistd::{Pid, chdir, execv, pipe, pivot_root, read, write},
 };
 
 use crate::{
     error::SandboxError,
-    filesystem::make_mounts_private,
+    filesystem::{
+        bind_mount, bind_mount_readonly, make_mounts_private, mount_proc, mount_tempfs,
+        unmount_old_root,
+    },
     namespace::{write_gid_map, write_uid_map},
 };
 
@@ -132,7 +136,31 @@ impl Sandbox {
         spawn!(read(read_fd.as_fd(), &mut buf))?;
         drop(read_fd);
 
+        let new_root = "/tmp/sandbox/root";
+        let old_root = format!("{}/{}", new_root, "old_root");
+        fs::create_dir_all(new_root).map_err(|e| SandboxError::Setup {
+            source: e,
+            call: "create_dir_all(new_root)",
+        })?;
+        fs::create_dir_all(old_root.as_str()).map_err(|e| SandboxError::Setup {
+            source: e,
+            call: "create_dir_all(old_root)",
+        })?;
+
         make_mounts_private()?;
+        // new_root must be a mount point for pivot_root — bind mount it onto itself.
+        bind_mount(new_root, new_root)?;
+        let common_mounts = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc"];
+        for mount in common_mounts {
+            bind_mount_readonly(mount, format!("{}/{}", new_root, mount).as_str())?;
+        }
+        mount_tempfs(format!("{}/{}", new_root, "tempfs").as_str())?;
+        mount_proc(format!("{}/{}", new_root, "proc").as_str())?;
+        spawn!(pivot_root(new_root, old_root.as_str()))?;
+        unmount_old_root("/old_root")?;
+
+        // must change the working directory once root is pivoted.
+        spawn!(chdir("/"))?;
 
         exec!(execv(&self.command, &self.argv))?;
         unreachable!("Child should have execv, no longer able to proceed in current program.")
